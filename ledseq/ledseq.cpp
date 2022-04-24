@@ -16,8 +16,6 @@ using namespace std;
 
 #define NUM_LEDS 30
 
-#define SERIAL_PORTNAME "/dev/ttyACM0"
-
 // all times are in micro seconds
 #define SCROLL_INTERVAL 50000
 #define PONG_INTERVAL 20000
@@ -348,7 +346,7 @@ int get_temps(char *temps) {
       int unit  = value % 10;
       int ten   = floor(value / 10);
 
-      char tmp_string[4];
+      char tmp_string[5];
       sprintf(tmp_string, "0%d0%d", ten, unit);
 
       stradd(temps, tmp_string, o, 4);
@@ -480,7 +478,7 @@ int get_cpu_time(cpu_time* result) {
 /*
  * Get the current CPU usage of the machine
  */
-int get_cpu_usage(double *fraction) {
+void get_cpu_usage(double *fraction) {
   cpu_time last, current;
 
   if (get_cpu_time(&last) == -1) {
@@ -941,8 +939,13 @@ typedef enum Tasks {
  * Runs one of the do_* functions to display something on the LEDs and display
  */
 void loop(
-  int tasks[], int num_tasks, int tasks_args[][5], int tasks_num_args[],
-  int tasks_intervals[], int delay, char* seq, 
+  int tasks[],
+  int num_tasks,
+  int tasks_args[][5],
+  int tasks_num_args[],
+  int tasks_intervals[],
+  int delay,
+  char* seq, 
   bool break_loop
 ) {
   int k = 0;
@@ -997,174 +1000,169 @@ int main(int argc, char *argv[]) {
   using std::chrono::duration_cast;
   
   /* set up serial device */
-  const char *portname = SERIAL_PORTNAME;
+  if (argc < 2) {
+    printf("Must provide device as first argument, e.g. /dev/ttyACM0\n");
+    return 1;
+  }
+  if (argc < 3) {
+    printf("No task given!\n");
+    return 1;
+  }
+
+  const char *portname = argv[1];
+
+  printf("Attempting to open dev %s...\n", portname);
   int fd = open(portname, O_RDWR | O_NOCTTY | O_SYNC);
 
   if (fd < 0) {
-    printf("error %d opening %s: %s", fd, portname, strerror(fd));
+    printf("error %d opening %s: %s\n", fd, portname, strerror(fd));
     return 1;
   }
 
   set_interface_attribs(fd, B9600, 0); // 9600 baud, no parity
   set_blocking(fd, 0);		             // set no blocking
 
-  if (argc > 1) {
-    const char *task_led = argv[1];
+  const char *task_led = argv[2];
 
-    int task2_offset = 0;
+  int task2_offset = 0;
 
-    bool task_alltime     = !strcmp(task_led, "alltime");
-    bool task_uptime      = !strcmp(task_led, "uptime");
-    bool task_scrolltext  = !strcmp(task_led, "scrolltext");
-    bool task_pong        = !strcmp(task_led, "pong");
-    bool task_mem_monitor = !strcmp(task_led, "mem");
-    bool task_cpu_monitor = !strcmp(task_led, "cpu");
-    bool task_quiet       = !strcmp(task_led, "quiet");
+  bool task_alltime     = !strcmp(task_led, "alltime");
+  bool task_uptime      = !strcmp(task_led, "uptime");
+  bool task_scrolltext  = !strcmp(task_led, "scrolltext");
+  bool task_pong        = !strcmp(task_led, "pong");
+  bool task_mem_monitor = !strcmp(task_led, "mem");
+  bool task_cpu_monitor = !strcmp(task_led, "cpu");
+  bool task_quiet       = !strcmp(task_led, "quiet");
 
-    if (task_scrolltext) {
-      task2_offset++;
-    }
-
-    const char *task_display = argc > 2 + task2_offset ? argv[2 + task2_offset] : NULL;
-
-    int num_tasks = 1;
-    if (task_display != NULL) {
-      num_tasks++;
-    }
-
-    int loop_tasks[num_tasks];
-    int loop_args[num_tasks][5];
-    int loop_num_args[num_tasks];
-    int loop_task_intervals[num_tasks];
-    int break_loop = false;
-    int loop_delay = 1000000;
-
-    for (int i = 0; i < num_tasks; i++) {
-      // the first argument for every do_* function is always fd
-      loop_args[i][0] = fd;
-
-      loop_task_intervals[i] = loop_delay;
-    }
-
-    // for use with scrolltext and other things requiring a char
-    char *seq;
-
-    Task task;
-
-    if (task_scrolltext) {
-      if (argc < 3) {
-        printf("You need to supply some text to scroll with!\n");
-        return 2;
-      }
-      
-      seq = argv[2];
-      
-      task = TASK_SCROLLTEXT;
-      loop_tasks[0] = task;
-      loop_num_args[0] = 1;
-      
-      loop_task_intervals[0] = SCROLL_INTERVAL;
-      loop_delay = fmin(loop_delay, SCROLL_INTERVAL);
-    }
-    else if (task_pong) {
-      task = TASK_PONG;
-      loop_tasks[0] = task;
-      loop_num_args[0] = 1;
-
-      loop_task_intervals[0] = PONG_INTERVAL;
-      loop_delay = fmin(loop_delay, PONG_INTERVAL);
-    }
-    else if (task_alltime || task_uptime) {
-      task = TASK_TIME;
-
-      loop_tasks[0] = task;
-      loop_args[0][1] = task_alltime ? TIME_MODE_ALLTIME : TIME_MODE_UPTIME;
-      loop_args[0][2] = task_display == NULL ? 1 : 0;
-      loop_num_args[0] = 3;
-    }
-    else if (task_cpu_monitor) {
-      task = TASK_CPU_MONITOR;
-      loop_tasks[0] = task;
-      loop_num_args[0] = 1;
-
-      loop_task_intervals[0] = 10; // the CPU usage monitor takes about a second for itself
-      loop_delay = fmin(loop_delay, 10);
-    }
-    else if (task_mem_monitor) {
-      task = TASK_MEM_MONITOR;
-      loop_tasks[0] = task;
-      loop_num_args[0] = 1;
-
-      loop_task_intervals[0] = MEM_INTERVAL;
-      loop_delay = fmin(loop_delay, MEM_INTERVAL);
-    }
-    else if (task_quiet) {
-      task = TASK_QUIET;
-      loop_tasks[0] = task;
-      loop_num_args[0] = 1;
-
-      break_loop = true;
-    }
-    else {
-      printf("Invalid task given!\n");
-
-      return 1;
-    }
-
-    if (task_display != NULL) {
-      if (!strcmp(task_display, "temps")) {
-        task = TASK_TEMPS;
-
-        loop_tasks[1] = task;
-        loop_num_args[1] = 1;
-      }
-      else if (!strcmp(task_display, "word")) {
-        if (argc < 4 + task2_offset) {
-          printf("Need to give a word!\n");
-          return 1;
-        }
-
-        const char *word_str = argv[3 + task2_offset];
-        int word;
-
-        if (!strcmp(word_str, "aced")) {
-          word = WORD_ACED;
-        }
-        else if (!strcmp(word_str, "beef")) {
-          word = WORD_BEEF;
-        }
-        else if (!strcmp(word_str, "babe")) {
-          word = WORD_BABE;
-        }
-        else if (!strcmp(word_str, "dead")) {
-          word = WORD_DEAD;
-        }
-        else if (!strcmp(word_str, "deaf")) {
-          word = WORD_DEAF;
-        }
-        else {
-          printf("Need to give a valid word!\n");
-          return 1;
-        }
-
-        task = TASK_WORD;
-        loop_tasks[1] = task;
-        loop_args[1][1] = word;
-        loop_num_args[1] = 2;
-      }
-    }
-
-    loop(
-      loop_tasks, num_tasks, loop_args, loop_num_args,
-      loop_task_intervals, loop_delay, seq,
-      break_loop
-    );
+  if (task_scrolltext) {
+    task2_offset++;
   }
-  else {
-    printf("No task given!\n");
 
+  const char *task_display = argc > 3 + task2_offset ? argv[3 + task2_offset] : NULL;
+
+  int num_tasks = 1;
+  if (task_display != NULL) {
+    num_tasks++;
+  }
+
+  int loop_tasks[num_tasks];
+  int loop_args[num_tasks][5];
+  int loop_num_args[num_tasks];
+  int loop_task_intervals[num_tasks];
+  int break_loop = false;
+  int loop_delay = 1000000;
+
+  for (int i = 0; i < num_tasks; i++) {
+    // the first argument for every do_* function is always fd
+    loop_args[i][0] = fd;
+    loop_task_intervals[i] = loop_delay;
+  }
+
+  // for use with scrolltext and other things requiring a char
+  char *seq;
+
+  Task task;
+
+  if (task_scrolltext) {
+    if (argc < 4) {
+      printf("You need to supply some text to scroll with!\n");
+      return 2;
+    }
+    
+    seq = argv[3];
+    
+    task = TASK_SCROLLTEXT;
+    loop_tasks[0] = task;
+    loop_num_args[0] = 1;
+    
+    loop_task_intervals[0] = SCROLL_INTERVAL;
+    loop_delay = fmin(loop_delay, SCROLL_INTERVAL);
+  } else if (task_pong) {
+    task = TASK_PONG;
+    loop_tasks[0] = task;
+    loop_num_args[0] = 1;
+
+    loop_task_intervals[0] = PONG_INTERVAL;
+    loop_delay = fmin(loop_delay, PONG_INTERVAL);
+  } else if (task_alltime || task_uptime) {
+    task = TASK_TIME;
+
+    loop_tasks[0] = task;
+    loop_args[0][1] = task_alltime ? TIME_MODE_ALLTIME : TIME_MODE_UPTIME;
+    loop_args[0][2] = task_display == NULL ? 1 : 0;
+    loop_num_args[0] = 3;
+  } else if (task_cpu_monitor) {
+    task = TASK_CPU_MONITOR;
+    loop_tasks[0] = task;
+    loop_num_args[0] = 1;
+
+    loop_task_intervals[0] = 10; // the CPU usage monitor takes about a second for itself
+    loop_delay = fmin(loop_delay, 10);
+  } else if (task_mem_monitor) {
+    task = TASK_MEM_MONITOR;
+    loop_tasks[0] = task;
+    loop_num_args[0] = 1;
+
+    loop_task_intervals[0] = MEM_INTERVAL;
+    loop_delay = fmin(loop_delay, MEM_INTERVAL);
+  } else if (task_quiet) {
+    task = TASK_QUIET;
+    loop_tasks[0] = task;
+    loop_num_args[0] = 1;
+
+    break_loop = true;
+  } else {
+    printf("Invalid task given!\n");
     return 1;
   }
+
+  if (task_display != NULL) {
+    if (!strcmp(task_display, "temps")) {
+      task = TASK_TEMPS;
+
+      loop_tasks[1] = task;
+      loop_num_args[1] = 1;
+    } else if (!strcmp(task_display, "word")) {
+      if (argc < 4 + task2_offset) {
+	printf("Need to give a word!\n");
+	return 1;
+      }
+
+      const char *word_str = argv[3 + task2_offset];
+      int word;
+
+      if (!strcmp(word_str, "aced")) {
+	word = WORD_ACED;
+      } else if (!strcmp(word_str, "beef")) {
+	word = WORD_BEEF;
+      } else if (!strcmp(word_str, "babe")) {
+	word = WORD_BABE;
+      } else if (!strcmp(word_str, "dead")) {
+	word = WORD_DEAD;
+      } else if (!strcmp(word_str, "deaf")) {
+	word = WORD_DEAF;
+      } else {
+	printf("Need to give a valid word!\n");
+	return 1;
+      }
+
+      task = TASK_WORD;
+      loop_tasks[1] = task;
+      loop_args[1][1] = word;
+      loop_num_args[1] = 2;
+    }
+  }
+
+  loop(
+    loop_tasks,
+    num_tasks,
+    loop_args,
+    loop_num_args,
+    loop_task_intervals,
+    loop_delay,
+    seq,
+    break_loop
+  );
 
   return 0;
 }
